@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>3DGS PLY スクロール・テリング・ビューワ</title>
+  <style>
+    :root{
+      --ui-bg: #0b0f14; --ui-fg: #e9f0f7; --accent: #00c2ff; --muted:#93a1ad33;
+    }
+    html, body { height: 100%; margin: 0; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, "Hiragino Kaku Gothic ProN", Meiryo, sans-serif; background:#0a0d12; color: var(--ui-fg); }
+    .app { display:grid; grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: 100svh; }
+    header { display:flex; gap:.75rem; align-items:center; padding:.6rem .9rem; background: #0c1218; border-bottom:1px solid #18202a; position: sticky; top: 0; z-index: 20; }
+    header h1 { font-size: 15px; font-weight: 600; letter-spacing:.02em; margin:0; color:#cfe8ff; }
+    header .spacer{flex:1}
+    header input[type="file"]{ display:none }
+    .btn{ display:inline-flex; align-items:center; gap:.5rem; padding:.5rem .75rem; border-radius: 999px; background:#111925; color:#cfe8ff; border:1px solid #1f2a36; cursor:pointer; font-size:13px; }
+    .btn:hover{ background:#122236; border-color:#273546 }
+    .btn small{ opacity:.8 }
+    .row { display:grid; grid-template-columns: minmax(300px, 480px) 1fr; gap: 0; height: calc(100svh - 50px); }
+    /* 左：ストーリー、右：3D */
+    .story { height: 100%; overflow:auto; scroll-snap-type: y mandatory; background: #0a0f16; border-right:1px solid #17202a; }
+    .panel { min-height: 92svh; display:flex; flex-direction:column; justify-content:center; gap:1rem; padding: 12vh 1.2rem; scroll-snap-align: start; scroll-snap-stop: always; border-bottom:1px dashed #1a2734; }
+    .panel h2{ font-size: 22px; margin:0 0 .25rem; color:#e7f6ff }
+    .panel p { margin:0; line-height:1.6; color:#c7d5e2 }
+    .panel .meta { font-size: 12px; opacity:.7 }
+    .viewer { position:relative; }
+    #three { position:absolute; inset:0; background:radial-gradient(1200px 800px at 60% 40%, #0f1722, #06090e 60%); }
+    .hud{ position:absolute; right:12px; bottom:12px; display:flex; flex-direction:column; gap:.5rem; z-index:10 }
+    .chip{ background:#0f1824; color:#cfe8ff; border:1px solid #1f2a36; padding:.35rem .6rem; border-radius:999px; font-size:12px }
+    .range{ appearance:none; width:220px; height:6px; border-radius:999px; background:#122236; border:1px solid #243043 }
+    .range::-webkit-slider-thumb{ appearance:none; width:16px; height:16px; border-radius:50%; background:var(--accent); border:2px solid #bbeaff }
+    .legend{ position:absolute; left:12px; bottom:12px; display:flex; gap:.5rem; align-items:center; flex-wrap:wrap }
+    .legend .key{ width:10px; height:10px; border-radius:50%; background:var(--accent) }
+    .hint{ position:absolute; top:12px; right:12px; font-size:12px; opacity:.8 }
+    .drop{ position:absolute; inset:0; display:none; place-items:center; border:2px dashed #2a3b4f; color:#b7d9ff; background:#0a0f16cc; font-size:14px; z-index:30 }
+    .drop.show{ display:grid }
+
+    @media (max-width: 980px){
+      .row{ grid-template-columns: 1fr; grid-template-rows: 45svh 55svh; height: auto; }
+      .story{ order:2; border-right:none; border-top:1px solid #17202a; }
+      .viewer{ order:1; min-height:45svh }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>3DGS PLY ビューワ（スクロール・テリング対応）</h1>
+      <div class="spacer"></div>
+      <label class="btn" title="ローカルのPLYを読み込む">
+        <input id="file" type="file" accept=".ply" />PLYを開く <small>(ドラッグ&ドロップ可)</small>
+      </label>
+      <button id="fit" class="btn" title="全体を表示">全体表示</button>
+    </header>
+
+    <div class="row">
+      <!-- ストーリー（各セクションがカメラのキーフレーム） -->
+      <aside class="story" id="story">
+        <section class="panel" data-camera="pos:-2,1.2,2.2;look:0,0,0;fov:45;dur:1200">
+          <h2>① 概観</h2>
+          <p>下へスクロールすると3Dの視点が切り替わります。PLYのドラッグ&ドロップ読込に対応。</p>
+          <p class="meta">ヒント：右側の3Dビューはドラッグ／ピンチで操作できます。</p>
+        </section>
+        <section class="panel" data-camera="pos:1.8,1.1,1.6;look:0,0,0;fov:38;dur:1200">
+          <h2>② ディテール</h2>
+          <p>データに頂点カラーがあれば自動で反映します。点サイズは下のスライダーで調整できます。</p>
+        </section>
+        <section class="panel" data-camera="pos:0.0,2.2,0.1;look:0,0,0;fov:55;dur:1400">
+          <h2>③ バードビュー</h2>
+          <p>各セクションは <code>data-camera</code> 属性で視点を指定できます。GitHub Pages でも1ファイルで動作します。</p>
+        </section>
+        <section class="panel" data-camera="pos:-0.4,0.3,0.8;look:0.05,0.05,0;fov:32;dur:1200">
+          <h2>④ クローズアップ</h2>
+          <p>独自の原稿をここに置けば、スクローリーテリングが完成します。</p>
+        </section>
+      </aside>
+
+      <!-- 3D ビューア -->
+      <main class="viewer">
+        <div id="three" aria-label="3Dビュー" role="application"></div>
+        <div class="hint">スクロールで視点が遷移</div>
+        <div class="legend"><span class="key"></span><span style="font-size:12px;opacity:.9">点サイズ</span><input id="psize" class="range" type="range" min="0.2" max="4.0" step="0.1" value="1.2"/></div>
+        <div class="hud"><div class="chip" id="status">準備中…</div></div>
+        <div class="drop" id="droplabel">PLYファイルをここにドロップ</div>
+      </main>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+    import { PLYLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/PLYLoader.js';
+
+    // ===== 基本セットアップ =====
+    const container = document.getElementById('three');
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.7));
+    renderer.setSize(container.clientWidth, container.clientHeight); container.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = null;
+
+    const camera = new THREE.PerspectiveCamera(50, container.clientWidth/container.clientHeight, 0.01, 1000);
+    camera.position.set(0.6, 0.6, 1.4);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true; controls.dampingFactor = 0.05;
+
+    // 環境ライティング（点群でも少しコントラスト）
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x202030, 0.6); scene.add(hemi);
+
+    // 軸目安（必要なら表示）
+    // const axes = new THREE.AxesHelper(0.25); scene.add(axes);
+
+    // ====== PLY ロードと表示 ======
+    let points, geometry, material, bboxSphere = null;
+
+    function buildPoints(bufferGeometry){
+      if (points) { scene.remove(points); points.geometry.dispose(); }
+      geometry = bufferGeometry;
+      geometry.computeBoundingSphere();
+      bboxSphere = geometry.boundingSphere;
+
+      material = new THREE.PointsMaterial({
+        size: 0.005, sizeAttenuation: true,
+        vertexColors: true,
+        depthWrite: false, transparent: true, opacity: 0.98
+      });
+      points = new THREE.Points(geometry, material);
+
+      // 中心合わせ＆スケーリング（シーン基準半径 ≈ 1）
+      const targetRadius = 1.0;
+      const scale = bboxSphere ? (targetRadius / bboxSphere.radius) : 1.0;
+      points.scale.setScalar(scale);
+      const center = bboxSphere ? bboxSphere.center.clone().multiplyScalar(scale) : new THREE.Vector3();
+      points.position.sub(center); // 原点に合わせる
+
+      scene.add(points);
+      fitView();
+      setStatus('PLY 読み込み完了');
+    }
+
+    // ローカルorURLからPLYを読み込み
+    async function loadPLYFromURL(url){
+      setStatus('PLY 読み込み中…');
+      const loader = new PLYLoader();
+      return new Promise((resolve, reject)=>{
+        loader.load(url, (geom)=>{ geom.computeVertexNormals?.(); buildPoints(geom); resolve(); }, undefined, reject);
+      });
+    }
+
+    async function loadPLYFromFile(file){
+      setStatus('PLY 解析中…');
+      const arrayBuffer = await file.arrayBuffer();
+      const loader = new PLYLoader();
+      const geom = loader.parse(arrayBuffer);
+      buildPoints(geom);
+    }
+
+    // ====== 画面リサイズ ======
+    function onResize(){
+      const w = container.clientWidth, h = container.clientHeight;
+      renderer.setSize(w, h); camera.aspect = w/h; camera.updateProjectionMatrix();
+    }
+    window.addEventListener('resize', onResize);
+
+    // ====== 点サイズUI ======
+    const psize = document.getElementById('psize');
+    psize.addEventListener('input', ()=>{
+      if(material){ material.size = parseFloat(psize.value) * 0.004; }
+    });
+
+    // ====== フィット表示 ======
+    function fitView(){
+      if(!bboxSphere) return;
+      const r = 1.05; // 少し余裕
+      const fov = THREE.MathUtils.degToRad(camera.fov);
+      const dist = r / Math.tan(fov/2);
+      const dir = new THREE.Vector3(0, 0, 1);
+      const target = new THREE.Vector3(0, 0, 0);
+      camera.position.copy(target.clone().add(dir.multiplyScalar(dist)));
+      camera.lookAt(target);
+      controls.target.copy(target);
+      controls.update();
+    }
+
+    document.getElementById('fit').addEventListener('click', fitView);
+
+    // ====== スクロール・テリング（セクション→視点アニメ） ======
+    const panels = [...document.querySelectorAll('.panel')];
+
+    function parseCam(str){
+      const spec = Object.fromEntries(str.split(';').map(s=>s.split(':')));
+      const pos = (spec.pos||'0,0,2').split(',').map(Number);
+      const look= (spec.look||'0,0,0').split(',').map(Number);
+      const fov = parseFloat(spec.fov||camera.fov);
+      const dur = parseInt(spec.dur||1000,10);
+      return { pos:new THREE.Vector3(...pos), look:new THREE.Vector3(...look), fov, dur };
+    }
+
+    let animId = 0;
+    function animateCamera(to){
+      animId++;
+      const my = animId;
+      const fromPos = camera.position.clone();
+      const fromLook= controls.target.clone();
+      const fromFov = camera.fov;
+      const start = performance.now();
+      const dur = to.dur;
+      function easeInOut(t){ return t<.5 ? 2*t*t : -1+(4-2*t)*t; }
+      function step(now){
+        if(my!==animId) return;
+        const t = Math.min(1, (now-start)/dur);
+        const e = easeInOut(t);
+        camera.position.lerpVectors(fromPos, to.pos, e);
+        const look = fromLook.clone().lerp(to.look, e);
+        controls.target.copy(look);
+        camera.fov = THREE.MathUtils.lerp(fromFov, to.fov, e);
+        camera.updateProjectionMatrix();
+        controls.update();
+        if(t<1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    }
+
+    const observer = new IntersectionObserver((entries)=>{
+      for(const en of entries){
+        if(en.isIntersecting){
+          const spec = parseCam(en.target.dataset.camera||'');
+          animateCamera(spec);
+        }
+      }
+    }, { root: document.querySelector('#story'), threshold: .6 });
+
+    panels.forEach(p=>observer.observe(p));
+
+    // ====== ドラッグ＆ドロップ／ファイル入力 ======
+    const fileInput = document.getElementById('file');
+    fileInput.addEventListener('change', (e)=>{
+      const f = e.target.files?.[0]; if(f) loadPLYFromFile(f);
+    });
+
+    const drop = document.getElementById('droplabel');
+    ['dragenter','dragover'].forEach(ev=>{
+      container.addEventListener(ev, (e)=>{ e.preventDefault(); drop.classList.add('show'); });
+    });
+    ['dragleave','drop'].forEach(ev=>{
+      container.addEventListener(ev, (e)=>{ e.preventDefault(); drop.classList.remove('show'); });
+    });
+    container.addEventListener('drop', (e)=>{
+      const f = e.dataTransfer.files?.[0]; if(f && f.name.toLowerCase().endsWith('.ply')) loadPLYFromFile(f);
+    });
+
+    // ====== URL パラメータ ply= で外部PLY読込（CORS対応サーバーのみ） ======
+    const url = new URL(location.href);
+    const plyUrl = url.searchParams.get('ply');
+    if(plyUrl) loadPLYFromURL(plyUrl).catch(err=>setStatus('読込エラー：'+err.message));
+
+    // ====== レンダーループ ======
+    function loop(){
+      controls.update();
+      renderer.render(scene, camera);
+      requestAnimationFrame(loop);
+    }
+    loop();
+
+    // ====== ユーティリティ ======
+    const status = document.getElementById('status');
+    function setStatus(t){ status.textContent = t; }
+
+    // 初期メッセージ
+    setStatus('PLYをドラッグ&ドロップ、または「PLYを開く」から選択');
+    onResize();
+  </script>
+</body>
+</html>
